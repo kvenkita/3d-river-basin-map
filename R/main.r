@@ -6,6 +6,7 @@
 
 libs <- c(
     "tidyverse", "sf", "geodata",
+    "tidyverse", "sf", "rnaturalearth",
     "elevatr", "terra", "rayshader",
     "rayrender"
 )
@@ -45,6 +46,16 @@ region_sf <- india_states |>
 if (nrow(region_sf) == 0) {
     stop("Kerala boundary was not found in GADM level-1 data.")
 }
+
+india_states <- rnaturalearth::ne_states(
+    country = "India",
+    returnclass = "sf"
+)
+
+region_sf <- india_states |>
+    dplyr::filter(
+        name_en == "Kerala"
+    )
 
 region_bbox <- sf::st_bbox(
     region_sf
@@ -90,6 +101,9 @@ region_rivers <- sf::st_read(
 
 # 3. GET BASINS
 #--------------
+
+url <- "https://data.hydrosheds.org/file/HydroBASINS/standard/hybas_as_lev04_v1c.zip"
+
 
 url <- "https://data.hydrosheds.org/file/HydroBASINS/standard/hybas_as_lev04_v1c.zip"
 
