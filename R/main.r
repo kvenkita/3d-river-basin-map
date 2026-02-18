@@ -5,8 +5,9 @@
 ###################################################
 
 libs <- c(
-    "tidyverse", "sf", "giscoR",
-    "elevatr", "terra", "rayshader"
+    "tidyverse", "sf", "rnaturalearth",
+    "elevatr", "terra", "rayshader",
+    "rayrender"
 )
 
 installed_libs <- libs %in% rownames(
@@ -26,101 +27,104 @@ invisible(lapply(
 
 sf::sf_use_s2(F)
 
-# 1. COUNTRY SF
-#---------------
+# 1. KERALA SF
+#-------------
 
-country_sf <- giscoR::gisco_get_countries(
-    country = "PL",
-    resolution = "1"
+india_states <- rnaturalearth::ne_states(
+    country = "India",
+    returnclass = "sf"
 )
 
-country_bbox <- sf::st_bbox(
-    country_sf
+region_sf <- india_states |>
+    dplyr::filter(
+        name_en == "Kerala"
+    )
+
+region_bbox <- sf::st_bbox(
+    region_sf
 )
 
 # 2. GET RIVERS
 #--------------
 
-url <- "https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_eu_shp.zip"
+url <- "https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_as_shp.zip"
 
-download.file(
-    url = url,
-    destfile = basename(url),
-    mode = "wb"
-)
+if (!file.exists(basename(url))) {
+    download.file(
+        url = url,
+        destfile = basename(url),
+        mode = "wb"
+    )
+}
 
-unzip(basename(url))
+if (!dir.exists("HydroRIVERS_v10_as_shp")) {
+    unzip(basename(url))
+}
+
 filename <- list.files(
-    path = "HydroRIVERS_v10_eu_shp",
+    path = "HydroRIVERS_v10_as_shp",
     pattern = ".shp",
     full.names = T
 )
 
-print(country_bbox)
-
-bbox_wkt <- "POLYGON((
-    14.12290 49.00285,
-    14.12290 54.83568,
-    24.14544 54.83568,
-    24.14544 49.00285,
-    14.12290 49.00285
-))
-"
-
-country_rivers <- sf::st_read(
-    filename,
-    wkt_filter = bbox_wkt
+bbox_wkt <- sprintf(
+    "POLYGON((%f %f, %f %f, %f %f, %f %f, %f %f))",
+    region_bbox["xmin"], region_bbox["ymin"],
+    region_bbox["xmin"], region_bbox["ymax"],
+    region_bbox["xmax"], region_bbox["ymax"],
+    region_bbox["xmax"], region_bbox["ymin"],
+    region_bbox["xmin"], region_bbox["ymin"]
 )
 
-plot(sf::st_geometry(country_sf), col = "red")
-plot(sf::st_geometry(country_rivers), add = T)
+region_rivers <- sf::st_read(
+    filename,
+    wkt_filter = bbox_wkt,
+    quiet = T
+)
 
 # 3. GET BASINS
-#---------------
+#--------------
 
-url <- "https://data.hydrosheds.org/file/HydroBASINS/standard/hybas_eu_lev04_v1c.zip"
+url <- "https://data.hydrosheds.org/file/HydroBASINS/standard/hybas_as_lev04_v1c.zip"
 
-download.file(
-    url = url,
-    destfile = basename(url),
-    mode = "wb"
-)
+if (!file.exists(basename(url))) {
+    download.file(
+        url = url,
+        destfile = basename(url),
+        mode = "wb"
+    )
+}
 
-list.files()
+if (!file.exists("hybas_as_lev04_v1c.shp")) {
+    unzip(basename(url))
+}
 
-unzip(basename(url))
-
-country_basin <- sf::st_read(
-    "hybas_eu_lev04_v1c.shp"
+region_basin <- sf::st_read(
+    "hybas_as_lev04_v1c.shp",
+    quiet = T
 ) |>
-    sf::st_intersection(country_sf) |>
+    sf::st_intersection(region_sf) |>
     dplyr::select(HYBAS_ID)
 
 # 4. CLIP RIVERS TO BASINS
 #-------------------------
 
-country_river_basin <- sf::st_intersection(
-    country_rivers,
-    country_basin
+region_river_basin <- sf::st_intersection(
+    region_rivers,
+    region_basin
 )
-
-unique(country_river_basin$HYBAS_ID)
 
 # 5. PALETTE
 #-----------
 
 palette <- hcl.colors(
-    n = 10,
+    n = length(unique(region_river_basin$HYBAS_ID)),
     palette = "Dark 3"
 ) |>
     sample()
 
-# pal <- colorRampPalette(
-#     palette
-# )(15)
-
 names(palette) <- unique(
-    country_river_basin$HYBAS_ID
+    region_river_basin$HYBAS_ID
 )
 
 pal <- as.data.frame(
@@ -133,16 +137,16 @@ pal <- as.data.frame(
         HYBAS_ID = as.numeric(HYBAS_ID)
     )
 
-country_river_basin_pal <- country_river_basin |>
+region_river_basin_pal <- region_river_basin |>
     dplyr::left_join(
         pal,
         by = "HYBAS_ID"
     )
 
-crs_lambert <- "+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +datum=WGS84 +units=m +no_frfs"
+crs_lambert <- "+proj=laea +lat_0=10.5 +lon_0=76.3 +datum=WGS84 +units=m +no_defs"
 
-country_basin_pal <- sf::st_transform(
-    country_basin,
+region_basin_pal <- sf::st_transform(
+    region_basin,
     crs = crs_lambert
 ) |>
     dplyr::inner_join(
@@ -154,11 +158,9 @@ country_basin_pal <- sf::st_transform(
     )
 
 # 6. WIDTH
-#----------
+#---------
 
-unique(country_river_basin_pal$ORD_FLOW)
-
-country_river_width <- country_river_basin_pal |>
+region_river_width <- region_river_basin_pal |>
     dplyr::mutate(
         width = as.numeric(
             ORD_FLOW
@@ -180,8 +182,9 @@ country_river_width <- country_river_basin_pal |>
 #-------
 
 elevation_raster <- elevatr::get_elev_raster(
-    locations = country_sf,
-    z = 8, clip = "locations"
+    locations = region_sf,
+    z = 9,
+    clip = "locations"
 ) |>
     terra::rast() |>
     terra::project(crs_lambert)
@@ -207,21 +210,22 @@ elevation_matrix |>
     ) |>
     rayshader::add_overlay(
         rayshader::generate_polygon_overlay(
-            geometry = country_basin_pal,
+            geometry = region_basin_pal,
             extent = elevation_raster,
             heightmap = elevation_matrix,
             linecolor = palette,
             palette = palette,
             data_column_fill = "HYBAS_ID"
-        ), alphalayer = .6 
+        ),
+        alphalayer = .6
     ) |>
     rayshader::add_overlay(
         rayshader::generate_line_overlay(
-            geometry = country_river_width,
+            geometry = region_river_width,
             extent = elevation_raster,
             heightmap = elevation_matrix,
-            color = country_river_width$palette,
-            linewidth = country_river_width$width,
+            color = region_river_width$palette,
+            linewidth = region_river_width$width,
             data_column_width = "width"
         ),
         alphalayer = 1
@@ -239,25 +243,27 @@ elevation_matrix |>
         theta = 0
     )
 
-    rayshader::render_camera(
-        phi = 89,
-        zoom = .675,
-        theta = 0
-    )
-    
+rayshader::render_camera(
+    phi = 89,
+    zoom = .675,
+    theta = 0
+)
+
 # 9. RENDER OBJECT
 #-----------------
 
 u <- "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/limpopo_golf_course_4k.hdr"
 
-download.file(
-    url = u,
-    destfile = basename(u),
-    mode = "wb"
-)
+if (!file.exists(basename(u))) {
+    download.file(
+        url = u,
+        destfile = basename(u),
+        mode = "wb"
+    )
+}
 
 rayshader::render_highquality(
-    filename = "poland-3d-river-basins.png",
+    filename = "kerala-3d-river-basins.png",
     preview = T,
     light = F,
     environment_light = basename(u),
